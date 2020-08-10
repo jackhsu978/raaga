@@ -47,7 +47,6 @@ const SoundPlayer: React.FunctionComponent<{
   );
   const wasPedalingRef = useRef(false);
   const [isPedaling, setIsPedaling] = useState(false);
-  const [pedaledMidis, setPedaledMidis] = useState<number[]>([]);
   const [keyboardRange, setKeyboardRange] = useState<Range>(getDefaultRange());
   const [isPlaying, setPlaying] = useState(false);
   const [mode, setMode] = useState<VISUALIZER_MODE>(VISUALIZER_MODE.WRITE);
@@ -164,8 +163,6 @@ const SoundPlayer: React.FunctionComponent<{
         );
       } else {
         // pedal up
-        console.log("pedal up", pedaledMidis.length, pedaledMidis.join(","));
-
         Object.keys(midiKeyboardState)
           .filter(midi => {
             const { pedaled, pressed } = midiKeyboardState[midi];
@@ -188,6 +185,21 @@ const SoundPlayer: React.FunctionComponent<{
       wasPedalingRef.current = isPedaling;
     }
   }, [isPedaling, midiKeyboardState, instrument]);
+
+  // useEffect(() => {
+  //   const handleKeyDown = (event: KeyboardEvent) => {
+  //     setIsPedaling(true);
+  //   };
+  //   const handleKeyUp = (event: KeyboardEvent) => {
+  //     setIsPedaling(false);
+  //   };
+  //   document.addEventListener("keydown", handleKeyDown);
+  //   document.addEventListener("keyup", handleKeyUp);
+  //   return () => {
+  //     document.removeEventListener("keydown", handleKeyDown);
+  //     document.removeEventListener("keyup", handleKeyUp);
+  //   };
+  // }, []);
 
   useEffect(() => {
     if (loadedMidi && midiSettings) {
@@ -258,7 +270,6 @@ const SoundPlayer: React.FunctionComponent<{
   useLayoutEffect(() => {
     setMidiKeyboardState({});
     setActiveInstrumentMidis([]);
-    setPedaledMidis([]);
     setIsPedaling(false);
   }, [mode]);
 

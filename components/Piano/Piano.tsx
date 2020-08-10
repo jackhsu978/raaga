@@ -9,19 +9,20 @@ import Tone from "tone";
 import { ThemeContext } from "@utils/ThemeContext";
 import { FunctionComponent, useState, useContext } from "react";
 import cn from "@sindresorhus/class-names";
+import { MidiKeyboardState } from "@utils/typings/midiKeyboardState";
 
 interface PianoProps {
   min: number;
   max: number;
   onPlay: (midi: number) => void;
   onStop: (midi: number) => void;
-  activeMidis: number[];
+  midiKeyboardState: MidiKeyboardState;
   className: string;
   activeInstrumentMidis: number[];
 }
 
 const _Piano: FunctionComponent<PianoProps> = ({
-  activeMidis,
+  midiKeyboardState,
   onPlay,
   onStop,
   max,
@@ -32,27 +33,14 @@ const _Piano: FunctionComponent<PianoProps> = ({
   const [isMousePressed, setMousePressed] = useState(false);
   const { naturalColor, accidentalColor } = useContext(ThemeContext);
 
-  const play = (midi: number) => {
-    if (activeMidis.includes(midi)) return;
-    onPlay(midi);
-  };
-
-  const stop = (midi: number) => {
-    const isInactive = !activeMidis.includes(midi);
-    if (isInactive) {
-      return;
-    }
-    onStop(midi);
-  };
-
   const onMouseDown = (midi: number) => {
     setMousePressed(true);
-    play(midi);
+    onPlay(midi);
   };
 
   const onMouseUp = (midi: number) => {
     setMousePressed(false);
-    stop(midi);
+    onStop(midi);
   };
 
   const range = { first: min, last: max };
@@ -71,7 +59,11 @@ const _Piano: FunctionComponent<PianoProps> = ({
         const left = getRelativeKeyPosition(midi, range) * naturalKeyWidth;
 
         const width = isAccidental ? 0.65 * naturalKeyWidth : naturalKeyWidth;
-        const isActive = activeMidis.includes(midi);
+        const midiState = midiKeyboardState[midi];
+        const isActive = !!(
+          midiState &&
+          (midiState.pressed || midiState.pedaled)
+        );
         const style = {
           left: `${left}%`,
           width: `${width}%`,
@@ -83,19 +75,17 @@ const _Piano: FunctionComponent<PianoProps> = ({
         const className = cn({
           "accidental-keys": isAccidental,
           "natural-keys": !isAccidental,
-          __active__: activeMidis.includes(midi),
-          bingo:
-            activeInstrumentMidis.includes(midi) && activeMidis.includes(midi),
-          "not-this":
-            activeInstrumentMidis.includes(midi) && !activeMidis.includes(midi)
+          __active__: isActive,
+          bingo: activeInstrumentMidis.includes(midi) && isActive,
+          "not-this": activeInstrumentMidis.includes(midi) && !isActive
         });
         return (
           <div
             data-id={midi}
             onMouseDown={() => onMouseDown(midi)}
             onMouseUp={() => onMouseUp(midi)}
-            onMouseEnter={isMousePressed ? () => play(midi) : undefined}
-            onMouseLeave={() => stop(midi)}
+            onMouseEnter={isMousePressed ? () => onPlay(midi) : undefined}
+            onMouseLeave={() => onStop(midi)}
             className={className}
             key={midi}
             style={style}

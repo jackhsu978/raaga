@@ -33,13 +33,21 @@ import { ThemeContext } from "@utils/ThemeContext";
 import { wrap } from "comlink";
 import CanvasWorker from "@workers/canvas.worker";
 import { controlVisualizer } from "@utils/visualizerControl";
+import { MidiKeyboardState } from "@utils/typings/midiKeyboardState";
+
+const dedupeNumbers = (numbers: number[]) => [...new Set(numbers)];
 
 const SoundPlayer: React.FunctionComponent<{
   offScreenCanvasSupport: OFFSCREEN_2D_CANVAS_SUPPORT;
 }> = ({ offScreenCanvasSupport }) => {
   const [instrument, setInstrument] = useState(instruments[0].value);
   const [loading, setLoading] = useState(false);
-  const [activeMidis, setActiveMidis] = useState<number[]>([]);
+  const [midiKeyboardState, setMidiKeyboardState] = useState<MidiKeyboardState>(
+    {}
+  );
+  const wasPedalingRef = useRef(false);
+  const [isPedaling, setIsPedaling] = useState(false);
+  const [pedaledMidis, setPedaledMidis] = useState<number[]>([]);
   const [keyboardRange, setKeyboardRange] = useState<Range>(getDefaultRange());
   const [isPlaying, setPlaying] = useState(false);
   const [mode, setMode] = useState<VISUALIZER_MODE>(VISUALIZER_MODE.WRITE);
@@ -97,29 +105,89 @@ const SoundPlayer: React.FunctionComponent<{
     (midi, velocity = 1, isFromMidiDevice = false) => {
       player.playNote(midi, instrument, velocity);
       if (mode === VISUALIZER_MODE.WRITE || !isFromMidiDevice) {
-        setActiveMidis(_activeMidis => _activeMidis.concat(midi));
+        setMidiKeyboardState(_midiKeyboardState => ({
+          ..._midiKeyboardState,
+          [midi]: {
+            pressed: true,
+            pedaled: isPedaling
+          }
+        }));
       } else {
-        setActiveInstrumentMidis(_activeMidis => _activeMidis.concat(midi));
+        setActiveInstrumentMidis(_activeMidis =>
+          dedupeNumbers(_activeMidis.concat([midi]))
+        );
       }
     },
-    [instrument, mode, player]
+    [instrument, mode, player, isPedaling]
   );
 
   const onNoteStop = useCallback(
     (midi, isFromMidiDevice = false) => {
-      player.stopNote(midi, instrument);
       if (mode === VISUALIZER_MODE.WRITE || !isFromMidiDevice) {
-        setActiveMidis(_activeMidis =>
-          _activeMidis.filter(activeMidi => activeMidi !== midi)
-        );
+        if (!isPedaling) {
+          player.stopNote(midi, instrument);
+        }
+        setMidiKeyboardState(_midiKeyboardState => ({
+          ..._midiKeyboardState,
+          [midi]: {
+            pressed: false,
+            pedaled: isPedaling
+          }
+        }));
       } else {
+        player.stopNote(midi, instrument);
         setActiveInstrumentMidis(_activeMidis =>
           _activeMidis.filter(x => x !== midi)
         );
       }
     },
-    [player, mode, instrument]
+    [player, mode, instrument, isPedaling]
   );
+
+  useEffect(() => {
+    if (
+      wasPedalingRef.current !== isPedaling &&
+      mode === VISUALIZER_MODE.WRITE
+    ) {
+      if (isPedaling) {
+        // pedal down
+        setMidiKeyboardState(_state =>
+          Object.keys(_state).reduce(
+            (newState, midi) => ({
+              ...newState,
+              [midi]: _state[midi].pressed
+                ? { pressed: true, pedaled: true }
+                : _state[midi]
+            }),
+            {}
+          )
+        );
+      } else {
+        // pedal up
+        console.log("pedal up", pedaledMidis.length, pedaledMidis.join(","));
+
+        Object.keys(midiKeyboardState)
+          .filter(midi => {
+            const { pedaled, pressed } = midiKeyboardState[midi];
+            return pedaled && !pressed;
+          })
+          .forEach(midi => {
+            player.stopNote(parseInt(midi, 10), instrument);
+          });
+
+        setMidiKeyboardState(_state =>
+          Object.keys(_state).reduce(
+            (newState, midi) => ({
+              ...newState,
+              [midi]: { ..._state[midi], pedaled: false }
+            }),
+            {}
+          )
+        );
+      }
+      wasPedalingRef.current = isPedaling;
+    }
+  }, [isPedaling, midiKeyboardState, instrument]);
 
   useEffect(() => {
     if (loadedMidi && midiSettings) {
@@ -136,8 +204,9 @@ const SoundPlayer: React.FunctionComponent<{
       (async () => {
         setLoading(true);
         await player.clear();
-        setActiveMidis([]);
+        setMidiKeyboardState({});
         setActiveInstrumentMidis([]);
+        setIsPedaling(false);
         setPlaying(true);
         setMidi(midi);
         setMidiSettings(_midiSettings);
@@ -159,11 +228,15 @@ const SoundPlayer: React.FunctionComponent<{
               if (isComplete) {
                 player.clear();
                 setPlaying(false);
-                setActiveMidis([]);
+                setMidiKeyboardState({});
                 return;
               }
 
-              setActiveMidis(notes.map(note => note.midi));
+              setMidiKeyboardState(
+                notes
+                  .map(note => note.midi)
+                  .reduce(midi => ({ [`${midi}`]: { pressed: true } }), {})
+              );
             }
           }
         );
@@ -183,8 +256,10 @@ const SoundPlayer: React.FunctionComponent<{
   }, [isPlaying]);
 
   useLayoutEffect(() => {
-    setActiveMidis([]);
+    setMidiKeyboardState({});
     setActiveInstrumentMidis([]);
+    setPedaledMidis([]);
+    setIsPedaling(false);
   }, [mode]);
 
   useEffect(() => {
@@ -205,6 +280,12 @@ const SoundPlayer: React.FunctionComponent<{
       onNoteStop(e.note.number, true);
     };
 
+    const _onControlChange = e => {
+      if (e.controller.name === "holdpedal") {
+        setIsPedaling(e.value > 127 / 2);
+      }
+    };
+
     if (!webMidi.supported) return;
 
     const input = webMidi.getInputById(midiDevice);
@@ -212,11 +293,13 @@ const SoundPlayer: React.FunctionComponent<{
     if (input) {
       input.addListener("noteon", "all", _onNoteStart);
       input.addListener("noteoff", "all", _onNoteStop);
+      input.addListener("controlchange", "all", _onControlChange);
     }
     return () => {
       if (input) {
         input.removeListener("noteon", "all", _onNoteStart);
         input.removeListener("noteoff", "all", _onNoteStop);
+        input.removeListener("controlchange", "all", _onControlChange);
       }
     };
   }, [midiDevice, onNoteStart, onNoteStop]);
@@ -269,7 +352,7 @@ const SoundPlayer: React.FunctionComponent<{
         <div className="piano-wrapper" style={{ height: PIANO_HEIGHT }}>
           {loading && <Loader className="absolute z-10 h-4" />}
           <Piano
-            activeMidis={activeMidis}
+            midiKeyboardState={midiKeyboardState}
             onPlay={onNoteStart}
             onStop={onNoteStop}
             min={keyboardRange.first}
